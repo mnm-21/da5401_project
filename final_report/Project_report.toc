@@ -1,0 +1,27 @@
+\contentsline {section}{\numberline {1}Introduction}{2}{section.1}%
+\contentsline {section}{\numberline {2}Phase 0: Exploratory Analysis and Baselines}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Dataset overview}{3}{subsection.2.1}%
+\contentsline {paragraph}{Dataset snapshot}{3}{section*.2}%
+\contentsline {paragraph}{Data quality and summary insights}{4}{section*.7}%
+\contentsline {subsection}{\numberline {2.2}Baseline attempted}{5}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Key observations, lessons and surprises}{5}{subsection.2.3}%
+\contentsline {section}{\numberline {3}Phase 1: Design Rationale and Experiments}{6}{section.3}%
+\contentsline {paragraph}{Data augmentation}{6}{section*.8}%
+\contentsline {paragraph}{Using a Contrastive alignment model as a router.}{6}{section*.9}%
+\contentsline {paragraph}{Why specialist regressors are needed.}{6}{section*.10}%
+\contentsline {paragraph}{Ranking loss for ordinal consistency.}{6}{section*.11}%
+\contentsline {paragraph}{Joint training with contrastive loss.}{7}{section*.12}%
+\contentsline {paragraph}{Routing at inference.}{7}{section*.13}%
+\contentsline {paragraph}{Rounding the predictions}{7}{section*.14}%
+\contentsline {subsection}{\numberline {3.1}Different variants of the joint training approach}{7}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Results}{7}{subsection.3.2}%
+\contentsline {section}{\numberline {4}Best Submission}{9}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Model components}{9}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Exact training \& inference recipe}{9}{subsection.4.2}%
+\contentsline {section}{\numberline {5}Conclusion}{10}{section.5}%
+\contentsline {section}{\numberline {A}Supplementary plots}{10}{appendix.A}%
+\contentsline {paragraph}{Score and metric distributions}{10}{section*.16}%
+\contentsline {paragraph}{Text length and script analysis}{10}{section*.17}%
+\contentsline {paragraph}{System prompts and feature correlations}{11}{section*.18}%
+\contentsline {paragraph}{Summary and submission analysis}{11}{section*.19}%
+\contentsline {section}{\numberline {B}Core PyTorch blocks in Best Submission}{11}{appendix.B}%

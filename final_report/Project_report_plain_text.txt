@@ -1,0 +1,130 @@
+METRICFIT: CONTRASTIVE METRIC-TEXT ALIGNMENT AND FINAL SUBMISSION
+Mayank Chandak
+IIT Madras
+
+
+Repository: https://github.com/mnm-21/da5401_project
+Date: [Date]
+Introduction
+- Metric learning is a type of machine learning that focuses on learning a distance function to measure how similar or different objects are from each other.
+- The quality of conversational AI agents hinges on practical, automated evaluation.
+- In this competition, we are tasked with building a metric learning model to predict the "fitness" or similarity score between a specific AI Evaluation Metric Definition and a corresponding Prompt-Response Text Pair.
+- The ability to accurately model this fitness is crucial for automatically generating and curating high-quality test datasets, ensuring that the test cases are genuinely aligned with the evaluation goals, and ultimately, building better, more reliable AI agents.
+- Given a metric definition (text embedding) and a prompt-response pair (text), predict the relevance or fitness on a scale of 1-10.
+- I show that a contrastive, alignment-first approach combined with specialist regressors and careful calibration produces robust predictions despite severe label skew and multilingual inputs.
+Phase 0: Exploratory Analysis and Baselines
+Dataset overview
+My main goal first was to explore the data, see the possible pitfalls and understand the problem statement. We have a supervised dataset consisting of prompt-response pairs, their associated evaluation metric names, and integer fitness scores in the range 0-10. Metric definitions are not given directly(as text or JSON) but are given precomputed as 768-dimensional embeddings (one per metric). Below are some important plots that summarize the insights from the data inspection performed in . I have more plots in the folder that I didn't include here. They are available in the repository.
+Dataset snapshot
+Train/test split: / samples covering metrics with embeddings shaped [MATH]. Each row bundles , , , optional , and the . System prompts are missing in roughly ), the mean and median of the scores for train set is 9.12 and 9.0 respectively. Any traditional approach will not be able to learn any low score distribution as the model only predicts higher values to always get lower error.
+- The number of samples per Metric (145 in total) has a large variation from 2 to 56 (Fig. ). The model might not be able to learn the distribution for metics with lower frequency. Some kind of per metric data augmentation is required.
+- Text lengths, especially responses, show very large variance (Fig. ). Some responses exceed 10,000 characters while others are nearly empty. We might need to use an embedding model that handles long-context variability without being dominated by outliers.
+- System prompts are missing in roughly one-third of all samples. Since this distrubtion is similar for both train and test data, it might not play as big a role.
+- The dataset is multilingual and script-diverse. The majority of text is in Devanagari(Hindi) or Latin(English) scripts, but several other scripts also appear. This increases representational complexity.
+- Cosine similarity features and simple length-based features show almost no correlation with the score (Fig. ). This indicates that naive similarity-based/linear baselines cannot capture the semantic alignment needed for this task.
+- All 145 metrics appear in both train and test splits, but the imbalance suggests that per-metric modelling, metric-aware sampling, or specialist models may be beneficial for handling rare or highly specific metrics.
+Baseline attempted
+I first implemented a LightGBM-based baseline to establish a performance floor and to tets a feature engineering pipeline. The approach consists of four main steps.
+- I computed cosine similarities between the precomputed metric embeddings (768 dimensions) and the Gemma-300M multilingual sentence embeddings for each text field: user prompt, response, system prompt, and their concatenation and used these as features. I also included simple features such as text lengths and per-metric shrinkage features. For each metric, I computed an out-of-fold (OOF) shrunk mean using GroupKFold to avoid data leakage. This gives a metric-specific prior that helps in cases where a metric has very few examples.
+- In addition, I created interaction features by taking the absolute difference and elementwise product between metric and text embeddings. I compressed these high-dimensional vectors using PCA to 128 dimensions to reduce the dimensionality and hopefullyimprove the model's performance.
+- I trained a LightGBM regressor using 5-fold GroupKFold, grouping by . This ensures that all samples from a metric appear together in the same fold, preventing metric-level leakage that would otherwise give overly optimistic validation results. The model uses standard regularization (L1/L2 penalties, feature and bagging fractions) and early stopping based on validation RMSE.
+- Raw LightGBM predictions were post-processed using isotonic regression. This method learns a monotonic mapping from the OOF predictions to the true labels. It corrects systematic miscalibration in the model and reduced OOF RMSE from 0.921 to 0.918. To handle metric-specific score biases, I fit a simple Ridge regression model that learns small per-metric offsets on top of the calibrated predictions. This step further improved OOF RMSE to 0.870. This shows that different metrics follow different score distributions, and adding metric-specific corrections is beneficial.
+Key observations, lessons and surprises
+The final baseline reached an OOF RMSE of 0.870, but its leaderboard score was 4.707, which is actually worse than the sample submission. I understood that the gap is mainly due to the heavy skew in the training data: the model learns to do well on the “easy” 9–10 region but generalises poorly elsewhere. The baseline was clearly overfitting to the dominant high-score patterns and made me realise the need for some kind of data augmentation or a mixed model approach.
+Phase 1: Design Rationale and Experiments
+My design approach was heavily inspired by my observations and lessons form the pahse0.ipynb notebook. Few things that I had to keep in mind were:
+- The data is extremely imbalanced, so some form of data augmentation is imperative.
+- Since we can't really impute scores of our own to the augmented data and also adding arbitrary scores might just make the problem worse, we need a loss function/method that does not require scores.
+- Seoarate the tasks into two parts: first learn to separate "good" and "bad" examples, then train specialist regressors for each group.
+Data augmentation
+I use negative sampling for data augmentation. What it does is, for every good training example I have, it switches the metric name with a random metric name and uses that as a negative sample. This helps the model to learn the alignment between the text and the metric. Also it takes care of the problem where some metrics had lesser frequency. For each positive sample we can choose (K parameter) negative samples.
+Using a Contrastive alignment model as a router.
+I pass every prompt-response embedding and the candidate metric embedding through a small MLP and treat the output as a compatibility score. Good pairs should score high, while metric-swapped (negative) pairs should score low. The training signal is a simple logistic contrastive loss with [MATH] negatives per anchor:
+[Equation: eq:contrastive_loss]
+where [MATH] is the score for the true metric of sample [MATH] and [MATH] are the scores for the [MATH] randomly swapped metrics. This loss does not need explicit labels for the negatives, so it fits perfectly with the augmentation strategy and keeps the router focused on pure alignment rather than the noisy score distribution.
+Why specialist regressors are needed.
+I noticed that the contrastive model output is almost binary, the distribution of the scores centered around 0 and 9 like a donut gaussian. I decide to train two experts: a low-score head that over-samples failure cases and a high-score head that focuses on good scores. The low expert gets a weighted MSE so that rarer tail scores dominate its gradient:
+[Equation: eq:low_weighted_mse]
+where [MATH] is the routing threshold and [MATH] controls how aggressively the extreme tail is emphasised.
+Ranking loss for ordinal consistency.
+To keep predictions ordered correctly, every mini-batch forms positive pairs [MATH] where [MATH]. The ranking loss penalises the model if the higher-score sample fails to beat the lower-score one by at least a small margin [MATH]:
+[Equation: eq:ranking_loss]
+Using this hinge-style loss stabilises training when the experts see similar content but different target scores, and it plugs directly into the joint objective in Eqn .
+Joint training with contrastive loss.
+Initially I was using the contrastive model output to direct the data into one
+of two regressors, each trained on appropriate subsets of the data. But I found
+that the model was not able to learn the distribution of the scores very well.
+So I decided to train a joint model with the contrastive loss and the regression
+losses. This setup should encourage the router to learn a meaningful separation,
+and it should encourage the experts to learn better. The combined objective will
+let the alignment information and numeric prediction reinforce each other rather
+than competing. The global loss mixes the contrastive term (Eqn ), the weighted low expert term (Eqn ), a standard high-score MSE, and the pairwise ranking loss (Eqn ):
+[Equation: eq:joint_loss]
+This single objective keeps the router grounded in alignment while giving it immediate feedback whenever a misrouted sample hurts the relevant expert.
+Routing at inference.
+Inference is deterministic: I compare the contrastive score against the learnt threshold, send the sample to the matching expert, and return that expert's prediction. This mirrors the "good vs bad" decomposition observed in the data and keeps the decision rule transparent.
+Rounding the predictions
+I rounded the predictions to the nearest integer using a custom heuristic. I ceil the scores [MATH] and round the scores [MATH]. This is a simple heuristic to avoid systematic under-prediction. This gave much better results than simple rounding. My best submission was 0.2 points lower compared to the simple rounded submission.
+Different variants of the joint training approach
+- training only the metric/text router with Eqn and no regression heads. (This method gave me the best score on the leaderboard)
+- treats samples with scores [MATH] as additional negatives so the router becomes more sensitive to failing responses. (This method did not perform as well as the pure contrastive router)
+- combining the router with low/high experts, weights the low expert using Eqn , and optimising the joint loss in Eqn .
+- same as above but with a larger [MATH] to enforce stronger ordinal constraints via Eqn . This variant performed the best and is the one that I used for the final submission.
+- ablates the hard routing decision by averaging the two experts' predictions using the router score as a soft gate; this performed worse and justified keeping the hard threshold.
+Results
+Against my expectations, the pure contrastive router performed the best and gave me the best score on the leaderboard. I had hoped that adding the regression heads and ranking loss would give me better performance as it made loical sense but I fell the lack of low score data was the reason for the poor performance. If I had more time, I would try more hyperparameter tuning and data augmentation techniques to improve the performance. The number of epochs in particular and the weights of the different loss components. The lower score regression model might have done a better job with less epochs so that it dosent overfit on the limited data available. Below is a plot that shows the distribution of the test pred scores for the current exp file in phase1.ipynb against some previous good ones.
+[Figure: Distribution of the test pred scores for the current exp file in phase1.ipynb against some previous good ones. Submission Custom round is the best submission.]
+Best Submission
+Model components
+- encodes every (system, user, response) triple plus the 145 metric descriptions into 768-d vectors. The resulting arrays live in for deterministic reuse.
+- a 2-layer MLP [MATH] with ReLU + Dropout 0.1 that concatenates text and metric embeddings and produces a logit. Training uses the logistic contrastive loss in Eqn with [MATH] negatives per anchor.
+- scores are discretised with (10 bins) before running . Each fold trains for 20 epochs; fold 9 (MSE [MATH]) becomes the frozen checkpoint for inference.
+- inference applies [MATH] to convert logits into the 0-10 range. This is the only scaling; no external regressors or calibration layers were needed for the winning run.
+- raw predictions go to , while the leaderboard file ceilings scores [MATH] and rounds the rest, preventing systematic underestimation of weak answers.
+Exact training \& inference recipe
+- format each row as and cache Gemma embeddings via .
+- embed all metric names once () and build a lookup map.
+- for each of the 10 folds, instantiate , train for 20 epochs with (batch size 128, [MATH] negatives), and evaluate MSE on the held-out fold.
+- pick the fold with the lowest validation MSE (fold 9) and reload its .
+- run on all test embeddings, multiply sigmoid outputs by 10, and save .
+- apply the heuristic if else to get , the file uploaded to Kaggle.
+Conclusion
+The final contrastive-only router, paired with the lightweight rounding rule, ended up giving the best leaderboard score. The takeaways I have from this project are: (i) clean alignment signals matter more than complex downstream regressors when data is scarce, and (ii) the low-score still needs targeted augmentation before specialist (regression) heads can help. If I continue the project, I would focus on getting more low-score examples, experimenting with softer routing (temperature-scaled logits or distillation), and tuning the joint loss weights with proper Bayesian search instead of hand-picked values. Using a finer classification might also benefit where we recursively classify into good and bad and finally combine our classes into 10 distinct ones. I didn't have time to implement this but it would be a good idea to try.
+Hyperparameters and Implementation Notes
+Supplementary plots
+All figures generated during exploration and submission analysis are available in the folder (committed to git). The complete list is organized below:
+Score and metric distributions
+
+- train vs test score histograms showing the extreme skew toward 9-10.
+- distribution of sample counts per metric (highly imbalanced).
+- distribution of mean scores across all 145 metrics.
+- per-metric score variance distribution.
+- detailed per-metric sample count analysis.
+- per-metric mean score breakdown.
+- scatter plots showing score distributions for individual metrics.
+- comprehensive view of all metrics sorted by sample count.
+- combined per-metric diagnostic dashboard.
+Text length and script analysis
+
+- distributions of user prompt and response lengths.
+- scatter plot showing score vs response length relationship.
+- text length distributions broken down by script type (boxplots).
+- pie chart showing script distribution in the dataset.
+- cumulative length distributions by script.
+- transition matrix showing user-script → response-script patterns.
+- comprehensive multi-panel analysis of text lengths and scripts.
+System prompts and feature correlations
+
+- missingness vs presence counts for system prompts, annotated with percentages.
+- full user-script → response-script transition heatmap showing all script pairs.
+- correlation analysis between engineered features.
+- Pearson correlation heatmap across all features including Gemma similarity scores.
+Summary and submission analysis
+
+- comprehensive summary dashboard combining key insights from all analyses.
+- comparison of submission score distributions (best round vs earlier baselines); this is the figure embedded in Figure .
+Core PyTorch blocks in Best Submission
+[Code block removed]
+[Code block removed]
+Google Research, embeddinggemma-300m, SentenceTransformers model card.
+Ke, G. et al., LightGBM: A Highly Efficient Gradient Boosting Decision Tree, 2017.
